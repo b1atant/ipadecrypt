@@ -226,17 +226,12 @@ func (c *Client) Upload(local, remote string, onProgress func(cur, total int64))
 		return fmt.Errorf("create %s: %w", remote, err)
 	}
 
-	reader := io.Reader(src)
-	var cr *countingReader
-	if onProgress != nil {
-		cr = &countingReader{r: src}
-		reader = cr
-	}
-
 	var n int64
 	if onProgress == nil {
-		n, err = dst.ReadFromWithConcurrency(reader, 0)
+		n, err = dst.ReadFromWithConcurrency(src, 0)
 	} else {
+		cr := &countingReader{r: src}
+
 		type uploadResult struct {
 			n   int64
 			err error
@@ -244,7 +239,7 @@ func (c *Client) Upload(local, remote string, onProgress func(cur, total int64))
 
 		done := make(chan uploadResult, 1)
 		go func() {
-			n, err := dst.ReadFromWithConcurrency(reader, 0)
+			n, err := dst.ReadFromWithConcurrency(cr, 0)
 			done <- uploadResult{n: n, err: err}
 		}()
 
@@ -264,13 +259,13 @@ func (c *Client) Upload(local, remote string, onProgress func(cur, total int64))
 	}
 
 	if err != nil {
-		_ = dst.Close()
-		_ = c.Remove(remote)
+		dst.Close()
+		c.Remove(remote)
 		return fmt.Errorf("upload %s: %w", remote, err)
 	}
 
 	if err := dst.Close(); err != nil {
-		_ = c.Remove(remote)
+		c.Remove(remote)
 		return fmt.Errorf("close %s: %w", remote, err)
 	}
 
