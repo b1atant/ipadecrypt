@@ -47,6 +47,12 @@ Only needed when you change `helper/helper.c` or `helper/entitlements.plist`.
 ./helper/build.sh
 ```
 
+On Windows CMD:
+
+```bat
+helper\build.bat
+```
+
 Produces `helper/dist/ipadecrypt-helper-arm64`. Copy it into place for `go:embed`:
 
 ```sh
