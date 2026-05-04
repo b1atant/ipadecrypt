@@ -16,10 +16,6 @@
 
 </div>
 
-## The trick
-
-You don't have to *run* an encrypted iOS app to decrypt it. Spawn it suspended via `SBSLaunchApplicationWithIdentifier` (main apps) or `fork` + `ptrace(PT_TRACE_ME)` + `execve` (extensions) - then `mach_vm_read` the `__TEXT` segment to get plaintext. The page-fault path through the kernel decrypts FairPlay on your behalf. It's my braindead way of calling `mremap_encrypted` without `mremap_encrypted`.
-
 ## Requirements
 
 ### On your computer
