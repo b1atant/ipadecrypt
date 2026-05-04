@@ -399,7 +399,7 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 	if err != nil {
 		var dfErr *pipeline.ErrDeviceFamilyMismatch
 		if errors.As(err, &dfErr) {
-			live.Fail("device family mismatch: app supports %v, device is %d (%s) — pass --patch-device-type to install anyway",
+			live.Fail("device family mismatch: app supports %v, device is %d (%s) - pass --patch-device-type to install anyway",
 				dfErr.Supported, dfErr.Device, pipeline.DeviceFamilyName(dfErr.Device))
 
 			return

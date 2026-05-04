@@ -495,6 +495,11 @@ static int copy_file(const char *src, const char *dst) {
     return n < 0 ? -1 : 0;
 }
 
+// Stage `src` at `dst`. Files are hardlinked (instant, zero I/O) on the
+// same filesystem; write_output() unlinks before O_CREAT so subsequent
+// writes break the link without touching the original. Falls back to a
+// real byte copy if link() fails (e.g. cross-filesystem). Symlinks and
+// directories are recreated structurally so the bundle layout matches.
 static int copy_tree(const char *src, const char *dst) {
     struct stat st;
     if (lstat(src, &st) != 0) return -1;
@@ -521,6 +526,7 @@ static int copy_tree(const char *src, const char *dst) {
         closedir(d);
         return rc;
     }
+    if (link(src, dst) == 0) return 0;
     return copy_file(src, dst);
 }
 
@@ -827,6 +833,11 @@ static dump_result_t write_output(const char *dst, const uint8_t *buf,
     char *slash = strrchr(parent, '/');
     if (slash) { *slash = '\0'; mkdirs(parent); }
 
+    // Break any hardlink staging set up by copy_tree before writing,
+    // otherwise O_TRUNC would also clobber the original installed bundle
+    // (same inode). unlink() removes only this directory entry; the
+    // original keeps its own.
+    unlink(dst);
     int fd = open(dst, O_CREAT | O_WRONLY | O_TRUNC, 0755);
     if (fd < 0) { ERR("open dst %s: %s", dst, strerror(errno)); return DUMP_OPEN_DST_FAIL; }
 
@@ -1563,7 +1574,7 @@ static int patch_target_abort(task_t task,
 
 
 // Pick a target pthread to hijack. Prefer a non-zero idle thread
-// (TH_STATE_WAITING/HALTED/STOPPED) — picking a thread mid-syscall
+// (TH_STATE_WAITING/HALTED/STOPPED) - picking a thread mid-syscall
 // breaks because thread_abort_safely + thread_set_state can leave it
 // resuming the original syscall instead of our injected PC. Fall back
 // to thread 0 (dyld bootstrap, only thread alive after halt) when no
@@ -1574,7 +1585,7 @@ static thread_act_t pick_hijack_thread(task_t task) {
     if (task_threads(task, &threads, &count) != KERN_SUCCESS || !threads)
         return MACH_PORT_NULL;
     thread_act_t chosen = MACH_PORT_NULL;
-    // Prefer the LAST non-zero idle thread — most-recently-created
+    // Prefer the LAST non-zero idle thread - most-recently-created
     // pthread is least likely to be holding global locks. Iterate forward
     // and overwrite chosen so the loop ends on the latest idle match.
     for (mach_msg_type_number_t i = 1; i < count; i++) {
@@ -1608,7 +1619,7 @@ static thread_act_t pick_hijack_thread(task_t task) {
 // AMFI; running it from target context satisfies text_crypter_create_hook.
 //
 // Returns 0 with *out_addr = target's mapping base. Leaks scratch on
-// success — target gets task_terminate'd shortly.
+// success - target gets task_terminate'd shortly.
 static int inject_mmap_in_target(task_t task, mach_port_t exc_port,
                                  thread_act_t thread,
                                  const char *path,
@@ -1622,7 +1633,7 @@ static int inject_mmap_in_target(task_t task, mach_port_t exc_port,
 
     // Allocate one scratch page for [path][fsignatures] + one trampoline
     // page for raw syscall stubs. Raw stubs avoid libc cerror_nocancel,
-    // which derefs pthread TLS on errors — bootstrap thread has no TLS.
+    // which derefs pthread TLS on errors - bootstrap thread has no TLS.
     size_t path_len = strlen(path) + 1;
     size_t scratch_size = ((path_len + sizeof(helper_fsignatures_t) + 0xfff)
                           & ~(size_t)0xfff);
@@ -1695,7 +1706,7 @@ static int inject_mmap_in_target(task_t task, mach_port_t exc_port,
         return -1;
     }
 
-    // fcntl(fd, F_ADDFILESIGS_RETURN, &fs) — registers cs_blob.
+    // fcntl(fd, F_ADDFILESIGS_RETURN, &fs) - registers cs_blob.
     uint64_t fcr = 0;
     if (target_call(task, thread, exc_port, tramp_fcntl,
             fd, F_ADDFILESIGS_RETURN, target_fs, 0, 0, 0, 0, &fcr, 10000) != 0) {
@@ -1720,7 +1731,7 @@ static int inject_mmap_in_target(task_t task, mach_port_t exc_port,
         return -1;
     }
 
-    // mremap_encrypted on cryptoff range — kernel attaches apple_protect_pager.
+    // mremap_encrypted on cryptoff range - kernel attaches apple_protect_pager.
     if (sel->selected.crypt.has_crypt &&
         sel->selected.crypt.cryptid != 0 && sel->selected.crypt.cryptsize > 0) {
         const size_t page = 0x4000;
