@@ -242,20 +242,14 @@ func (c *Client) InstalledVersion(bundlePath string) (string, error) {
 }
 
 // FindInstalledByBundleID returns the first installed .app whose Info.plist
-// contains bundleID. grep -aF works for both XML and binary plists.
+// contains bundleID
 func (c *Client) FindInstalledByBundleID(bundleID string) (string, error) {
 	if strings.ContainsAny(bundleID, "'\"\\$`\n") {
 		return "", fmt.Errorf("unsupported characters in bundle-id %q", bundleID)
 	}
 
 	cmd := fmt.Sprintf(
-		"sh -c '"+
-			"for p in /var/containers/Bundle/Application/*/*.app; do "+
-			"  if grep -qaF \"%s\" \"$p/Info.plist\" 2>/dev/null; then "+
-			"    echo \"$p\"; exit 0; "+
-			"  fi; "+
-			"done; exit 0"+
-			"'",
+		"sh -c 'grep -laF \"%s\" /var/containers/Bundle/Application/*/*.app/Info.plist 2>/dev/null | head -n1'",
 		bundleID)
 
 	out, errOut, code, err := c.RunSudo(cmd)
@@ -267,7 +261,12 @@ func (c *Client) FindInstalledByBundleID(bundleID string) (string, error) {
 		return "", fmt.Errorf("find-by-bundle-id exit %d: %s", code, strings.TrimSpace(errOut))
 	}
 
-	return strings.TrimSpace(out), nil
+	hit := strings.TrimSpace(out)
+	if hit == "" {
+		return "", nil
+	}
+
+	return strings.TrimSuffix(hit, "/Info.plist"), nil
 }
 
 // FindInstalled locates an installed app bundle directory by its .app name.
