@@ -922,33 +922,67 @@ func pluralize(count, noun string) string {
 	return count + " " + noun + "s"
 }
 
-// prettyImageName renders helper image paths as something readable.
-//
-//	"Sensor-App"                                   -> "Sensor-App"
-//	"Frameworks/Foo.framework/Foo"                 -> "Foo.framework"
-//	"Frameworks/Foo.framework/Versions/A/Foo"      -> "Foo.framework"
-//	"PlugIns/Bar.appex/Bar"                        -> "Bar.appex"
-//
-// Anything else passes through unchanged.
-func prettyImageName(name string) string {
-	if i := strings.Index(name, ".framework/"); i >= 0 {
-		start := strings.LastIndex(name[:i], "/") + 1
-		return name[start:i] + ".framework"
-	}
-
-	if i := strings.Index(name, ".appex/"); i >= 0 {
-		start := strings.LastIndex(name[:i], "/") + 1
-		return name[start:i] + ".appex"
-	}
-
-	return name
-}
-
 func parseInt64(s string) int64 {
 	var n int64
 	fmt.Sscanf(s, "%d", &n)
 
 	return n
+}
+
+func imageFailReason(token string) string {
+	switch token {
+	case "":
+		return ""
+	case "open_src_fail":
+		return "couldn't open source"
+	case "read_src_fail":
+		return "couldn't read source"
+	case "vm_read_err":
+		return "couldn't read decrypted memory"
+	case "cryptoff_zero_pages":
+		return "decrypted region was all zeros"
+	case "open_dst_fail":
+		return "couldn't open output"
+	case "write_dst_fail":
+		return "couldn't write output"
+	case "oom":
+		return "out of memory"
+	default:
+		return token
+	}
+}
+
+// Returns "" for the recoverable EXC_BREAKPOINT case so caller stays silent.
+func dyldTrappedMessage(ev device.Event) string {
+	via := ev.Attr("via")
+	exc := ev.Attr("exception")
+	sig := ev.Attr("signal")
+	outcome := ev.Attr("outcome")
+
+	if via == "mach" {
+		switch exc {
+		case "EXC_BREAKPOINT":
+			return ""
+		case "EXC_CRASH", "EXC_BAD_ACCESS", "EXC_BAD_INSTRUCTION", "":
+			return "app halted during launch; recovering what was loaded"
+		default:
+			return fmt.Sprintf("app halted during launch (%s); recovering what was loaded", exc)
+		}
+	}
+
+	if via == "ptrace" {
+		if outcome == "exited" {
+			return "app exited during launch; recovering what was loaded"
+		}
+
+		if outcome == "signaled" && sig == "9" {
+			return "app couldn't fully launch on this device; recovering what was loaded"
+		}
+
+		return "app crashed during launch; recovering what was loaded"
+	}
+
+	return "app halted during launch; recovering what was loaded"
 }
 
 func (p *helperProgress) HandleEvent(ev device.Event) helperUpdate {
@@ -967,7 +1001,7 @@ func (p *helperProgress) HandleEvent(ev device.Event) helperUpdate {
 		}
 
 	case "spawn_chmod":
-		return helperUpdate{note: fmt.Sprintf("chmod +x %s (was mode %s)", path.Base(ev.Attr("path")), ev.Attr("old_mode"))}
+		return helperUpdate{note: fmt.Sprintf("made %s executable", path.Base(ev.Attr("path")))}
 
 	case "spawn_path":
 		return helperUpdate{note: fmt.Sprintf("spawned %s via ptrace", path.Base(ev.Attr("exec")))}
@@ -975,35 +1009,47 @@ func (p *helperProgress) HandleEvent(ev device.Event) helperUpdate {
 	case "spawn_path_fallback":
 		return helperUpdate{note: fmt.Sprintf("SBS failed on %s, falling back to ptrace", path.Base(ev.Attr("exec")))}
 
-	case "dyld":
-		switch ev.Attr("phase") {
-		case "resuming":
-			return helperUpdate{spin: fmt.Sprintf("running %s so dyld binds frameworks", path.Base(ev.Attr("src")))}
-		case "trapped":
-			exc := ev.Attr("exception")
-			sig := ev.Attr("signal")
-
-			if exc == "" {
-				exc = "unparsed"
-			}
-
-			if sig != "" && sig != "0" {
-				return helperUpdate{note: fmt.Sprintf("target trapped before dyld bound frameworks: %s signal=%s", exc, sig)}
-			}
-
-			return helperUpdate{note: fmt.Sprintf("target trapped before dyld bound frameworks: %s", exc)}
-		}
-
 	case "spawn_failed":
 		return helperUpdate{note: fmt.Sprintf("could not spawn %s (skipped)", path.Base(ev.Attr("src")))}
 
+	case "dyld":
+		switch ev.Attr("phase") {
+		case "resuming":
+			return helperUpdate{spin: fmt.Sprintf("running %s", path.Base(ev.Attr("src")))}
+		case "trapped":
+			msg := dyldTrappedMessage(ev)
+			if msg == "" {
+				return helperUpdate{}
+			}
+
+			return helperUpdate{note: msg}
+		}
+
+	case "patch":
+		return helperUpdate{}
+
+	case "inject":
+		switch ev.Attr("phase") {
+		case "skipped":
+			if ev.Attr("name") == "" && ev.Attr("reason") == "not_plain_arm64" {
+				return helperUpdate{note: "skipping framework recovery (target is arm64e; injection unsupported)"}
+			}
+
+			return helperUpdate{}
+		case "failed":
+			return helperUpdate{note: fmt.Sprintf("could not decrypt %s in target", path.Base(ev.Attr("name")))}
+		case "tramp_alloc_fail", "tramp_write_fail":
+			return helperUpdate{note: "couldn't set up decrypt in target"}
+		}
+
+		return helperUpdate{}
+
 	case "image":
 		name := ev.Attr("name")
-		pretty := prettyImageName(name)
 
 		switch ev.Attr("phase") {
 		case "start":
-			return helperUpdate{spin: fmt.Sprintf("decrypting %s", pretty)}
+			return helperUpdate{spin: fmt.Sprintf("decrypting %s", name)}
 		case "done":
 			p.dumpedTotal.Add(1)
 
@@ -1019,15 +1065,15 @@ func (p *helperProgress) HandleEvent(ev device.Event) helperUpdate {
 			size := parseInt64(ev.Attr("size"))
 
 			return helperUpdate{
-				note: fmt.Sprintf("decrypted %s (%s)", pretty, humanBytes(size)),
+				note: fmt.Sprintf("decrypted %s (%s)", name, humanBytes(size)),
 				spin: fmt.Sprintf("decrypted %d image(s)", p.dumpedTotal.Load()),
 			}
 		case "failed":
-			if reason := ev.Attr("reason"); reason != "" {
-				return helperUpdate{note: fmt.Sprintf("failed to decrypt %s (%s)", pretty, reason)}
+			if reason := imageFailReason(ev.Attr("reason")); reason != "" {
+				return helperUpdate{note: fmt.Sprintf("failed to decrypt %s (%s)", name, reason)}
 			}
 
-			return helperUpdate{note: fmt.Sprintf("failed to decrypt %s", pretty)}
+			return helperUpdate{note: fmt.Sprintf("failed to decrypt %s", name)}
 		}
 
 	case "pack":
@@ -1044,7 +1090,7 @@ func (p *helperProgress) HandleEvent(ev device.Event) helperUpdate {
 		return helperUpdate{}
 	}
 
-	// Unknown event: surface everything we got so nothing is silently dropped.
+	// Catch-all: dump unknown events verbatim so nothing is silently lost.
 	parts := make([]string, 0, len(ev.Attrs)+1)
 	parts = append(parts, "event="+ev.Name)
 
