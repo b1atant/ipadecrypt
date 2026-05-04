@@ -228,12 +228,6 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 
 	live.OK("%s@%s iOS %s %s", cfg.Device.User, cfg.Device.Host, probe.IOSVersion, probe.Arch)
 
-	//
-	// If a bundle-id target is already installed, offer to decrypt the
-	// on-device build (e.g. TestFlight) instead of reinstalling from the
-	// App Store. Non-TTY aborts - no way to confirm.
-	//
-
 	if target.bundleId != "" && !decryptForce {
 		live = tui.NewLive()
 		live.Spin("checking if %s is installed", target.bundleId)
@@ -252,26 +246,31 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 
 			live.OK("found installed %s v%s", target.bundleId, version)
 
-			if !tui.IsTTY() {
-				tui.Err("%s v%s is already installed on the device.", target.bundleId, version)
-				tui.Info("Non-TTY runs can't prompt. Uninstall the app first, pass a local .ipa path, or re-run in a TTY.")
+			useInstalled := decryptUseInstalled
+			if !useInstalled {
+				if !tui.IsTTY() {
+					tui.Err("%s v%s is already installed on the device.", target.bundleId, version)
+					tui.Info("pass --use-installed to decrypt the installed build, --force to fetch from the App Store, or run in a TTY.")
 
-				return
+					return
+				}
+
+				idx, err := tui.Select(
+					fmt.Sprintf("%s v%s is installed - which build do you want decrypted?", target.bundleId, version),
+					[]string{
+						fmt.Sprintf("Installed build v%s (no App Store reinstall)", version),
+						"Latest from App Store (will reinstall, overwriting installed)",
+					},
+				)
+				if err != nil {
+					tui.Err("%v", err)
+					return
+				}
+
+				useInstalled = idx == 0
 			}
 
-			idx, err := tui.Select(
-				fmt.Sprintf("%s v%s is installed - which build do you want decrypted?", target.bundleId, version),
-				[]string{
-					fmt.Sprintf("Installed build v%s (no App Store reinstall)", version),
-					"Latest from App Store (will reinstall, overwriting installed)",
-				},
-			)
-			if err != nil {
-				tui.Err("%v", err)
-				return
-			}
-
-			if idx == 0 {
+			if useInstalled {
 				live = tui.NewLive()
 				live.Spin("preparing helper")
 

@@ -22,6 +22,7 @@ var (
 	decryptNoCleanup    bool
 	decryptNoVerify     bool
 	decryptForce        bool
+	decryptUseInstalled bool
 	decryptPatchDevType bool
 
 	versionsLogResponses bool
@@ -55,8 +56,10 @@ func main() {
 	decrypt.Flags().StringVarP(&decryptOutput, "output", "o", "", "output path for the decrypted IPA (default: ./<bundleID>_<version>.decrypted.ipa)")
 	decrypt.Flags().BoolVar(&decryptNoCleanup, "no-cleanup", false, "leave remote staging files in place")
 	decrypt.Flags().BoolVar(&decryptNoVerify, "no-verify", false, "skip the post-decrypt cryptid==0 check on every Mach-O")
-	decrypt.Flags().BoolVarP(&decryptForce, "force", "f", false, "force reinstall from provided .ipa source regardless of what's on the device")
+	decrypt.Flags().BoolVarP(&decryptForce, "force", "f", false, "fetch from App Store and reinstall, ignoring what's installed on the device")
+	decrypt.Flags().BoolVar(&decryptUseInstalled, "use-installed", false, "decrypt the installed build directly; skip the App Store path even if a newer version exists")
 	decrypt.Flags().BoolVar(&decryptPatchDevType, "patch-device-type", false, "if the IPA's UIDeviceFamily excludes this device, append the device's family (iPadOS apps then run on iOS)")
+	decrypt.MarkFlagsMutuallyExclusive("force", "use-installed")
 
 	versions := &cobra.Command{
 		Use:   "versions <bundle-id|app-store-id|app-store-url>",
