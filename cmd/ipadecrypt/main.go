@@ -21,6 +21,7 @@ var (
 	decryptOutput       string
 	decryptNoCleanup    bool
 	decryptNoVerify     bool
+	decryptExtraVerify  bool
 	decryptForce        bool
 	decryptUseInstalled bool
 	decryptPatchDevType bool
@@ -56,6 +57,7 @@ func main() {
 	decrypt.Flags().StringVarP(&decryptOutput, "output", "o", "", "output path for the decrypted IPA (default: ./<bundleID>_<version>.decrypted.ipa)")
 	decrypt.Flags().BoolVar(&decryptNoCleanup, "no-cleanup", false, "leave remote staging files in place")
 	decrypt.Flags().BoolVar(&decryptNoVerify, "no-verify", false, "skip the post-decrypt cryptid==0 check on every Mach-O")
+	decrypt.Flags().BoolVar(&decryptExtraVerify, "extra-verify", false, "additionally byte-compare every output Mach-O against its source counterpart (skip the encrypted region + cryptid byte) to catch decrypt corruption")
 	decrypt.Flags().BoolVarP(&decryptForce, "force", "f", false, "fetch from App Store and reinstall, ignoring what's installed on the device")
 	decrypt.Flags().BoolVar(&decryptUseInstalled, "use-installed", false, "decrypt the installed build directly; skip the App Store path even if a newer version exists")
 	decrypt.Flags().BoolVar(&decryptPatchDevType, "patch-device-type", false, "if the IPA's UIDeviceFamily excludes this device, append the device's family (iPadOS apps then run on iOS)")

@@ -282,7 +282,7 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 
 				live.OK("helper ready")
 
-				runDecryptOnBundle(dev, helperPath, target.bundleId, installedPath, version, "")
+				runDecryptOnBundle(dev, helperPath, target.bundleId, installedPath, version, "", "")
 
 				return
 			}
@@ -484,12 +484,15 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 		live.OK("already installed → %s", install.bundlePath)
 	}
 
-	runDecryptOnBundle(dev, plan.helperPath, appBundleID, install.bundlePath, appVersion, plan.stagingRemote)
+	runDecryptOnBundle(dev, plan.helperPath, appBundleID, install.bundlePath, appVersion, plan.stagingRemote, encPath)
 }
 
-// runDecryptOnBundle runs helper → pull → strip → verify → cleanup on an
+// runDecryptOnBundle runs helper → pull → verify → cleanup on an
 // installed bundle. stagingRemote may be "" for the use-installed path.
-func runDecryptOnBundle(dev *device.Client, helperPath, bundleID, bundlePath, version, stagingRemote string) {
+// srcIPAPath is the source IPA on the host when one exists (App Store
+// download / cache hit / local --ipa); empty for the use-installed path
+// where the source lives on-device only. Used by --extra-verify.
+func runDecryptOnBundle(dev *device.Client, helperPath, bundleID, bundlePath, version, stagingRemote, srcIPAPath string) {
 	outRemote := remoteOutputPath(bundleID, version)
 
 	if err := dev.Mkdir(path.Dir(outRemote)); err != nil {
@@ -607,6 +610,38 @@ func runDecryptOnBundle(dev *device.Client, helperPath, bundleID, bundlePath, ve
 		}
 
 		live.OK("%d Mach-O(s) verified cryptid=0%s", res.Scanned, suffix)
+	}
+
+	if decryptExtraVerify {
+		if srcIPAPath == "" {
+			tui.Info("--extra-verify skipped: no source IPA available for the installed-bundle path")
+		} else {
+			live = tui.NewLive()
+			live.Spin("byte-comparing every Mach-O against source IPA")
+
+			res, err := pipeline.ExtraVerify(outLocal, srcIPAPath)
+			if err != nil {
+				live.Fail("extra-verify failed: %v", err)
+				return
+			}
+
+			if len(res.Mismatches) > 0 {
+				live.Fail("%d Mach-O(s) differ from source outside the encrypted region", len(res.Mismatches))
+
+				for _, m := range res.Mismatches {
+					tui.Info("  %s — %s", m.Name, m.Reason)
+				}
+
+				return
+			}
+
+			suffix := ""
+			if len(res.Missing) > 0 {
+				suffix = fmt.Sprintf(" (%d source-missing)", len(res.Missing))
+			}
+
+			live.OK("%d Mach-O(s) byte-match source%s", res.Compared, suffix)
+		}
 	}
 
 	cleanupDecrypt(dev, decryptNoCleanup, stagingRemote, outRemote)
