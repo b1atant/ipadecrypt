@@ -181,6 +181,11 @@ func humanBytes(n int64) string {
 }
 
 func decryptHandler(cmd *cobra.Command, args []string) {
+	if decryptFromAppStore && decryptUseInstalled {
+		tui.Err("--from-appstore and --use-installed are mutually exclusive; pass at most one.")
+		return
+	}
+
 	cfg, paths, err := loadConfigOrDefault(rootDirOverride)
 	if err != nil {
 		tui.Err("%v", err)
@@ -228,7 +233,7 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 
 	live.OK("%s@%s iOS %s %s", cfg.Device.User, cfg.Device.Host, probe.IOSVersion, probe.Arch)
 
-	if target.bundleId != "" && !decryptForce {
+	if target.bundleId != "" && !decryptFromAppStore {
 		live = tui.NewLive()
 		live.Spin("checking if %s is installed", target.bundleId)
 
@@ -250,7 +255,7 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 			if !useInstalled {
 				if !tui.IsTTY() {
 					tui.Err("%s v%s is already installed on the device.", target.bundleId, version)
-					tui.Info("pass --use-installed to decrypt the installed build, --force to fetch from the App Store, or run in a TTY.")
+					tui.Info("pass --use-installed to decrypt the installed build, --from-appstore to fetch fresh and reinstall, or run in a TTY.")
 
 					return
 				}
@@ -795,7 +800,7 @@ func ensureInstalledBundle(dev *device.Client, plan installPlan, uploadPath stri
 		return installUploadedBundle(dev, plan, uploadPath, false, "", notify, onProgress)
 	}
 
-	if !decryptForce {
+	if !decryptFromAppStore {
 		notify(installHashIPA)
 
 		execName, wantSum, err := pipeline.MainExecSHA256(uploadPath)
