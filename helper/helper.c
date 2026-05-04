@@ -1677,8 +1677,33 @@ static int inject_mmap_in_target(task_t task, mach_port_t exc_port,
         slot[1] = 0xD4001001u;
         slot[2] = slot[3] = 0xD65F03C0u;
     }
+
+    // Prefault trampoline at slot offset 64. After mremap_encrypted attaches
+    // apple_protect_pager to the crypt region, the kernel still won't run
+    // fairplayd until something inside the *target* task touches each page.
+    // Cross-task vm_read doesn't trigger that fault path - on iOS combos
+    // where dyld halts before binding (e.g. iOS 16.1.1 Dopamine), the
+    // helper would otherwise read raw on-disk ciphertext.
+    //
+    //   prefault(x0=base, x1=size, x2=stride):
+    //     cbz   x1, .ret
+    //   .lp: ldrb  w3, [x0]
+    //     add   x0, x0, x2
+    //     subs  x1, x1, x2
+    //     b.hi  .lp
+    //   .ret: ret
+    static const uint32_t prefault[6] = {
+        0xB40000A1u, // cbz x1, +20
+        0x39400003u, // ldrb w3, [x0]
+        0x8B020000u, // add x0, x0, x2
+        0xEB020021u, // subs x1, x1, x2
+        0x54FFFFA8u, // b.hi -12
+        0xD65F03C0u, // ret
+    };
     if (mach_vm_write(task, tramp, (vm_offset_t)(uintptr_t)buf, sizeof(buf))
             != KERN_SUCCESS ||
+        mach_vm_write(task, tramp + sizeof(buf),
+            (vm_offset_t)(uintptr_t)prefault, sizeof(prefault)) != KERN_SUCCESS ||
         mach_vm_protect(task, tramp, 0x4000, FALSE,
             VM_PROT_READ | VM_PROT_EXECUTE) != KERN_SUCCESS) {
         EVT("event=inject phase=tramp_write_fail");
@@ -1690,10 +1715,11 @@ static int inject_mmap_in_target(task_t task, mach_port_t exc_port,
         vm_machine_attribute_val_t cv = MATTR_VAL_CACHE_FLUSH;
         mach_vm_machine_attribute(task, tramp, 0x4000, MATTR_CACHE, &cv);
     }
-    const mach_vm_address_t tramp_open   = tramp + 0;
-    const mach_vm_address_t tramp_fcntl  = tramp + 16;
-    const mach_vm_address_t tramp_mmap   = tramp + 32;
-    const mach_vm_address_t tramp_mremap = tramp + 48;
+    const mach_vm_address_t tramp_open     = tramp + 0;
+    const mach_vm_address_t tramp_fcntl    = tramp + 16;
+    const mach_vm_address_t tramp_mmap     = tramp + 32;
+    const mach_vm_address_t tramp_mremap   = tramp + 48;
+    const mach_vm_address_t tramp_prefault = tramp + sizeof(buf);
 
     // open(path, O_RDONLY)
     uint64_t fd = 0;
@@ -1742,10 +1768,25 @@ static int inject_mmap_in_target(task_t task, mach_port_t exc_port,
         if (target_call(task, thread, exc_port, tramp_mremap,
                 enc, len, sel->selected.crypt.cryptid,
                 sel->selected.slice.cputype, sel->selected.slice.cpusubtype, 0,
-                0, &rc, 20000) != 0) {
-            EVT("event=inject phase=mremap_fail");
+                0, &rc, 20000) != 0 || (int32_t)rc != 0) {
+            EVT("event=inject phase=mremap_fail rc=%lld", (long long)(int32_t)rc);
         } else {
             EVT("event=inject phase=mremap_done rc=%lld", (long long)(int32_t)rc);
+
+            // Force fairplayd decrypt-on-fault for every page now, while we
+            // still have the target thread hijacked. Without this, the next
+            // step's cross-task vm_read pulls the raw file-backed bytes
+            // because the target never touched them itself (dyld halted
+            // early on iOS 16.1.1 Dopamine etc.). 60s budget covers a
+            // multi-MB region: ~one fairplayd RPC per 16 KB page.
+            uint64_t pf_rc = 0;
+            if (target_call(task, thread, exc_port, tramp_prefault,
+                    enc, len, page, 0, 0, 0, 0, &pf_rc, 60000) != 0) {
+                EVT("event=inject phase=prefault_fail");
+            } else {
+                EVT("event=inject phase=prefault_done pages=%llu",
+                    (unsigned long long)(len / page));
+            }
         }
     }
 

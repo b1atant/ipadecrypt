@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/londek/ipadecrypt/internal/appstore"
@@ -529,7 +532,22 @@ func runDecryptOnBundle(dev *device.Client, helperPath, bundleID, bundlePath, ve
 		}
 	}
 
-	_, _, code, err := dev.RunHelper(helperPath, bundleID, bundlePath, outRemote, onEvent, nil)
+	var (
+		helperStderr io.Writer
+		stderrNoter  *liveNoteWriter
+	)
+
+	if decryptVerbose {
+		stderrNoter = newLiveNoteWriter(live)
+		helperStderr = stderrNoter
+	}
+
+	_, _, code, err := dev.RunHelper(helperPath, bundleID, bundlePath, outRemote, onEvent, helperStderr)
+
+	if stderrNoter != nil {
+		stderrNoter.Flush()
+	}
+
 	if err != nil {
 		live.Fail("helper run: %v", err)
 		return
@@ -933,6 +951,61 @@ func cleanupDecrypt(dev *device.Client, noCleanup bool, stagingRemote, outRemote
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// liveNoteWriter buffers an io.Writer stream and emits one tui.Live.Note per
+// completed line. Used to surface helper LOG/ERR (newline-delimited human
+// text on stderr) into the live UI when --verbose is set, instead of
+// dumping raw stderr bytes that would race against the spinner.
+type liveNoteWriter struct {
+	live *tui.Live
+	mu   sync.Mutex
+	buf  []byte
+}
+
+func newLiveNoteWriter(live *tui.Live) *liveNoteWriter {
+	return &liveNoteWriter{live: live}
+}
+
+func (w *liveNoteWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.buf = append(w.buf, p...)
+
+	for {
+		nl := bytes.IndexByte(w.buf, '\n')
+		if nl < 0 {
+			break
+		}
+
+		line := strings.TrimRight(string(w.buf[:nl]), "\r")
+		w.buf = w.buf[nl+1:]
+
+		if line != "" {
+			w.live.Note("%s", line)
+		}
+	}
+
+	return len(p), nil
+}
+
+// Flush emits any trailing buffered bytes that didn't end in a newline.
+// Call after the producer is known to be done writing.
+func (w *liveNoteWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if len(w.buf) == 0 {
+		return
+	}
+
+	line := strings.TrimRight(string(w.buf), "\r")
+	w.buf = nil
+
+	if line != "" {
+		w.live.Note("%s", line)
+	}
 }
 
 func pluralize(count, noun string) string {
