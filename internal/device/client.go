@@ -58,7 +58,12 @@ func Connect(ctx context.Context, dev config.Device) (*Client, error) {
 
 	sshClient := ssh.NewClient(sshConn, chans, reqs)
 
-	sftpClient, err := sftp.NewClient(sshClient)
+	sftpClient, err := sftp.NewClient(sshClient,
+		sftp.MaxPacketUnchecked(1<<18), // 256 KB
+		sftp.UseConcurrentReads(true),
+		sftp.UseConcurrentWrites(true),
+		sftp.MaxConcurrentRequestsPerFile(64),
+	)
 	if err != nil {
 		sshClient.Close()
 		return nil, fmt.Errorf("sftp open: %w", err)
