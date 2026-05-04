@@ -580,24 +580,6 @@ func runDecryptOnBundle(dev *device.Client, helperPath, bundleID, bundlePath, ve
 
 	pw.Flush()
 
-	if !decryptKeepMetadata {
-		live.Spin("stripping iTunesMetadata.plist")
-
-		if _, err := pipeline.StripMetadata(outLocal); err != nil {
-			live.Fail("strip metadata failed: %v", err)
-			return
-		}
-	}
-
-	if !decryptKeepWatch {
-		live.Spin("stripping Watch/")
-
-		if _, err := pipeline.StripWatch(outLocal); err != nil {
-			live.Fail("strip watch failed: %v", err)
-			return
-		}
-	}
-
 	live.OK("→ %s", outLocal)
 
 	if !decryptNoVerify {
@@ -712,7 +694,7 @@ func patchSourceForDevice(encPath, iosVersion string, deviceFamily int, patchDev
 		return patchResult{}, fmt.Errorf("prepare temp ipa: %w", err)
 	}
 
-	res, err := pipeline.PatchForInstall(encPath, tmp, iosVersion, deviceFamily, patchDeviceType, decryptKeepWatch)
+	res, err := pipeline.PatchForInstall(encPath, tmp, iosVersion, deviceFamily, patchDeviceType)
 	if err != nil {
 		os.Remove(tmp)
 		return patchResult{}, err

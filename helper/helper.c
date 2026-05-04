@@ -2144,7 +2144,18 @@ static int run_zip(const char *staging, const char *ipa_path) {
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
-    char *argv[] = { "zip", "-qr", (char *)ipa_path, "Payload", NULL };
+    char *argv[] = { "zip", "-qr", "-1", (char *)ipa_path, "Payload",
+        "-x",
+        "Payload/*/Watch/*", "Payload/*/Watch",
+        "Payload/*/WatchKitSupport2/*", "Payload/*/WatchKitSupport2",
+        "Payload/*/SC_Info/*", "Payload/*/SC_Info",
+        "*/SC_Info/*", "*/SC_Info",
+        "Payload/*/*.dSYM/*", "Payload/*/*.dSYM",
+        "Payload/*/BCSymbolMaps/*", "Payload/*/BCSymbolMaps",
+        "Payload/*/Symbols/*", "Payload/*/Symbols",
+        "Payload/META-INF/*", "Payload/META-INF",
+        "Payload/iTunesMetadata.plist", "Payload/iTunesArtwork",
+        NULL };
     pid_t pid = 0;
     const char *zip_paths[] = { "/var/jb/usr/bin/zip", "/usr/bin/zip", NULL };
     int rc = -1;

@@ -62,10 +62,10 @@ type plistPlan struct {
 }
 
 // PatchForInstall rewrites the main Info.plist (MinimumOSVersion plus, when
-// patchDeviceType is true, UIDeviceFamily) and—unless keepWatch—drops Watch/
-// entries. The Info.plist is pre-scanned so a device-family mismatch fails
-// early, without writing a partial output IPA.
-func PatchForInstall(src, dst, target string, deviceFamily int, patchDeviceType, keepWatch bool) (PatchResult, error) {
+// patchDeviceType is true, UIDeviceFamily) and drops Watch/ entries. The
+// Info.plist is pre-scanned so a device-family mismatch fails early, without
+// writing a partial output IPA.
+func PatchForInstall(src, dst, target string, deviceFamily int, patchDeviceType bool) (PatchResult, error) {
 	var res PatchResult
 
 	r, err := zip.OpenReader(src)
@@ -110,7 +110,7 @@ func PatchForInstall(src, dst, target string, deviceFamily int, patchDeviceType,
 	w := zip.NewWriter(out)
 
 	for _, f := range r.File {
-		if !keepWatch && isWatchPath(f.Name) {
+		if isWatchPath(f.Name) {
 			res.WatchRemoved++
 			continue
 		}
@@ -411,81 +411,6 @@ func AppDirName(ipaPath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no Payload/*.app/ directory in %s", ipaPath)
-}
-
-// rewriteIPA rebuilds ipaPath in place, dropping entries for which skip returns
-// true. It returns the number of entries dropped; when zero, the source file
-// is left untouched and no rename happens.
-func rewriteIPA(ipaPath string, skip func(name string) bool) (int, error) {
-	r, err := zip.OpenReader(ipaPath)
-	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", ipaPath, err)
-	}
-
-	defer r.Close()
-
-	tmp := ipaPath + ".tmp"
-
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", tmp, err)
-	}
-
-	w := zip.NewWriter(out)
-
-	cleanup := func() { os.Remove(tmp) }
-
-	removed := 0
-
-	for _, f := range r.File {
-		if skip(f.Name) {
-			removed++
-			continue
-		}
-
-		if err := copyEntry(f, w); err != nil {
-			w.Close()
-			out.Close()
-			cleanup()
-
-			return 0, fmt.Errorf("copy %s: %w", f.Name, err)
-		}
-	}
-
-	if err := w.Close(); err != nil {
-		out.Close()
-		cleanup()
-
-		return 0, fmt.Errorf("close zip: %w", err)
-	}
-
-	if err := out.Close(); err != nil {
-		cleanup()
-		return 0, fmt.Errorf("close file: %w", err)
-	}
-
-	if removed == 0 {
-		cleanup()
-		return 0, nil
-	}
-
-	if err := os.Rename(tmp, ipaPath); err != nil {
-		return 0, fmt.Errorf("rename: %w", err)
-	}
-
-	return removed, nil
-}
-
-func StripMetadata(ipaPath string) (bool, error) {
-	n, err := rewriteIPA(ipaPath, func(name string) bool {
-		return strings.EqualFold(filepath.Base(name), "iTunesMetadata.plist")
-	})
-
-	return n > 0, err
-}
-
-func StripWatch(ipaPath string) (int, error) {
-	return rewriteIPA(ipaPath, isWatchPath)
 }
 
 func isWatchPath(name string) bool {
